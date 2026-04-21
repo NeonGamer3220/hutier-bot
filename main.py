@@ -292,7 +292,7 @@ MINECRAFT_API_URL = os.getenv("MINECRAFT_API_URL", "http://localhost:8080").rstr
 
 WIPE_GLOBAL_COMMANDS = os.getenv("WIPE_GLOBAL_COMMANDS", "0") == "1"
 
-COOLDOWN_SECONDS = 14 * 24 * 60 * 60
+COOLDOWN_SECONDS = 30 * 24 * 60 * 60
 DATA_FILE = "data.json"
 
 HTTP_TIMEOUT_SECONDS = 10  # hard timeout so it never "thinks forever"
@@ -311,12 +311,9 @@ TICKET_TYPES = [
     ("Axe", "axe", 1469763738889486518),
     ("Mace", "mace", 1469763612452196375),
     ("Cart", "cart", 1469763920871952435),
-    ("Creeper", "creeper", 1469764200812249180),
     ("DiaSMP", "diasmp", 1469763946968911893),
     ("OGVanilla", "ogvanilla", 1469764329460203571),
     ("ShieldlessUHC", "shieldlessuhc", 1469766017243807865),
-    ("SpearMace", "spearmace", 1469968704203788425),
-    ("SpearElytra", "spearelytra", 1469968762575912970),
 ]
 
 # Required rounds for each gamemode (FT = First to, LT = Last to)
@@ -334,11 +331,8 @@ TICKET_ROUNDS = {
     "sword": ("FT10", "FT6", None),
     "uhc": ("FT6", "FT3", None),
     "pot": ("FT10", "FT6", None),
-    "creeper": ("FT6", "FT4", "FT3"),  # FT3 if lose round
     "shieldlessuhc": ("FT6", "FT4", None),
     "axe": ("FT20", "FT10", None),
-    "spearmace": ("FT6", "FT3", None),
-    "spearelytra": ("FT6", "FT3", None),
 }
 
 
@@ -384,8 +378,6 @@ GAMEMODE_ALIASES = {
     "nethpot": "nethpot",
     "uhc": "uhc",
     "shieldlessuhc": "shieldlessuhc",
-    "spearmace": "spearmace",
-    "spearelytra": "spearelytra",
 }
 
 # Reverse mapping: bot keys (lowercase) -> proper display names
@@ -399,12 +391,9 @@ GAMEMODE_DISPLAY_NAMES = {
     "axe": "Axe",
     "mace": "Mace",
     "cart": "Cart",
-    "creeper": "Creeper",
     "diasmp": "DiaSMP",
     "ogvanilla": "OGVanilla",
     "shieldlessuhc": "ShieldlessUHC",
-    "spearmace": "SpearMace",
-    "spearelytra": "SpearElytra",
 }
 
 def normalize_gamemode(mode: str) -> str:
@@ -435,12 +424,9 @@ GAMEMODE_COLORS = {
     "smp": 0x2ecc71,       # Green
     "axe": 0x8b4513,       # Brown
     "cart": 0xf1c40f,      # Yellow
-    "creeper": 0x27ae60,   # Dark Green
     "diasmp": 0x1abc9c,    # Teal
     "ogvanilla": 0x8e44ad, # Dark Purple
     "shieldlessuhc": 0xd35400,  # Dark Orange
-    "spearmace": 0x16a085,    # Dark Teal
-    "spearelytra": 0x2980b9,   # Dark Blue
 }
 
 GAMEMODE_INDICATORS = {
@@ -453,12 +439,9 @@ GAMEMODE_INDICATORS = {
     "smp": "🟢",
     "axe": "🟤",
     "cart": "🟡",
-    "creeper": "🟢",
     "diasmp": "🔵",
     "ogvanilla": "🟣",
     "shieldlessuhc": "🟠",
-    "spearmace": "🟢",
-    "spearelytra": "🔵",
 }
 
 
@@ -1976,11 +1959,8 @@ QUEUE_CHANNELS = {
     "nethpot": 1495038766769897482,
     "smp": 1495038799800176660,
     "vanilla": 1495038839591534834,
-    "creeper": 1495038857597681818,
     "cart": 1495038915453779982,
     "diasmp": 1495038938640027760,
-    "spearelytra": 1495038976988545206,
-    "spearmace": 1495038999876600008,
     "shieldlessuhc": 1495039115119296572,
     "ogvanilla": 1495039145330872341,
 }
@@ -1995,13 +1975,10 @@ QUEUE_PING_ROLES = {
     "nethpot": 1495044163194847322,
     "smp": 1495044237551472893,
     "vanilla": 1495044315272052929,
-    "creeper": 1495044383425171506,
     "cart": 1495044436403556443,
     "diasmp": 1495044514992095333,
     "shieldlessuhc": 1495044593211670711,
     "ogvanilla": 1495044664502386698,
-    "spearelytra": 1495044732680667247,
-    "spearmace": 1495044798472781944,
 }
 
 # Category where ticket channels will be created
@@ -3927,7 +3904,7 @@ async def link(interaction: discord.Interaction, code: str = None):
                 embed = discord.Embed(
                     title="⏳ Már van egy kódod!",
                     description=f"A meglévő kódod: `{existing_code}`\n\n"
-                               f"**Minecraft szerver:** `45.140.164.183:25942`\n"
+                               f"**Minecraft szerver:** `bestpvp.hu`\n"
                                f"Ezt használd: `/link {existing_code}` a Minecraftban!\n"
                                f"Vagy várd meg amíg lejár és generálj újat.",
                     color=discord.Color.orange()
@@ -3942,7 +3919,7 @@ async def link(interaction: discord.Interaction, code: str = None):
             try:
                 await interaction.user.send(
                     f"🎮 **Összekapcsolási kód:** `{new_code}`\n\n"
-                    f"**Minecraft szerver:** `45.140.164.183:25942`\n"
+                    f"**Minecraft szerver:** `bestpvp.hu`\n"
                     f"Írd be a Minecraftban: `/link {new_code}`\n"
                     f"A kód {LINK_CODE_EXPIRY_MINUTES} percig érvényes."
                 )
@@ -3953,7 +3930,7 @@ async def link(interaction: discord.Interaction, code: str = None):
             embed = discord.Embed(
                 title="✅ Kód generálva!",
                 description=f"```\n{new_code}\n```\n"
-                           f"**Minecraft szerver:** `45.140.164.183:25942`\n"
+                           f"**Minecraft szerver:** `bestpvp.hu`\n"
                            f"Írd be a Minecraftban: `/link {new_code}`\n"
                            f"A kód **{LINK_CODE_EXPIRY_MINUTES} percig** érvényes.",
                 color=discord.Color.green()
