@@ -1,1 +1,1 @@
-# neotiers-bot
+# HuTier Discord Bot
