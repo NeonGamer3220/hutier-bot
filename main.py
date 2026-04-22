@@ -1385,9 +1385,6 @@ async def api_get_tests(username: str, mode: str) -> Dict[str, Any]:
 
 
 async def api_post_test(username: str, mode: str, rank: str, tester: discord.Member) -> Dict[str, Any]:
-    if not WEBSITE_URL:
-        return {"status": 0, "data": {"error": "WEBSITE_URL not set"}}
-
     mode_for_api = get_gamemode_display_name(mode)
     payload = {
         "username": username,
@@ -1398,21 +1395,36 @@ async def api_post_test(username: str, mode: str, rank: str, tester: discord.Mem
         "ts": int(time.time()),
     }
 
-    # Use Supabase direct upsert if available - handles duplicates natively
+    # 1. Try Supabase direct upsert if available - handles duplicates natively
     if USE_SUPABASE_API:
         print(f"[API_POST_TEST] Using Supabase direct upsert for {username}/{mode_for_api}")
         success = await supabase_upsert("tests", payload)
         if success:
-            print(f"[API_POST_TEST] Supabase upsert succeeded")
             return {"status": 200, "data": {"success": True}}
-        else:
-            print(f"[API_POST_TEST] Supabase upsert failed")
-            return {"status": 500, "data": {"error": "Supabase upsert failed"}}
+        # else fall through to next method
 
-    # Fallback: Website API with manual duplicate deletion
+    # 2. Try direct PostgreSQL upsert if db_pool available
+    if db_pool is not None:
+        print(f"[API_POST_TEST] Using direct DB upsert for {username}/{mode_for_api}")
+        success = await db_upsert_test(
+            username=username,
+            mode=mode_for_api,
+            rank=rank,
+            tester_id=str(tester.id),
+            tester_name=tester.display_name,
+            ts=int(time.time())
+        )
+        if success:
+            return {"status": 200, "data": {"success": True}}
+        # else fall through
+
+    # 3. Fallback: Website API (requires WEBSITE_URL)
+    if not WEBSITE_URL:
+        return {"status": 0, "data": {"error": "WEBSITE_URL not set"}}
+
     timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)
 
-    # Check for existing test and delete it
+    # Check for existing test and delete it before inserting
     try:
         check_url = f"{WEBSITE_URL}/api/tests?username={username}"
         async with http_session.get(check_url, headers=_auth_headers(), timeout=timeout) as resp:
@@ -1426,27 +1438,28 @@ async def api_post_test(username: str, mode: str, rank: str, tester: discord.Mem
                         test_id = test.get("id")
                         if test_id:
                             print(f"Found duplicate test for {username}/{test_mode}: id={test_id}, deleting...")
-                            # Try Supabase delete if available
-                            if USE_SUPABASE_API:
-                                delete_ok = await supabase_delete("tests", {"id": test_id})
-                                print(f"Supabase delete result: {delete_ok}")
+                            # Prefer DB delete, then Supabase, then website API
+                            if db_pool is not None:
+                                await db_delete_test(str(test_id))
+                            elif USE_SUPABASE_API:
+                                await supabase_delete("tests", {"id": test_id})
                             else:
-                                # Try website API delete
-                                delete_url = f"{WEBSITE_URL}/api/tests/{test_id}"
+                                del_url = f"{WEBSITE_URL}/api/tests/{test_id}"
                                 try:
-                                    async with http_session.delete(delete_url, headers=_auth_headers(), timeout=timeout) as d_resp:
+                                    async with http_session.delete(del_url, headers=_auth_headers(), timeout=timeout) as d_resp:
                                         print(f"Delete API status: {d_resp.status}")
                                 except Exception as e:
                                     print(f"Delete failed: {e}")
     except Exception as e:
         print(f"Error checking/deleting duplicate: {e}")
 
-    # Insert new test with upsert flag
+    # Insert new test via website API with upsert flag
     url = f"{WEBSITE_URL}/api/tests"
-    payload["upsert"] = True
-    print(f"[API_POST_TEST] Sending: username={username}, mode={mode_for_api}, rank={rank}")
+    payload_web = payload.copy()
+    payload_web["upsert"] = True
+    print(f"[API_POST_TEST] Sending to website: username={username}, mode={mode_for_api}, rank={rank}")
 
-    async with http_session.post(url, json=payload, headers=_auth_headers(), timeout=timeout) as resp:
+    async with http_session.post(url, json=payload_web, headers=_auth_headers(), timeout=timeout) as resp:
         try:
             data = await resp.json()
             print(f"[API_POST_TEST] Save response: status={resp.status}, data={data}")
@@ -3062,6 +3075,8 @@ async def tierlistnamechange(interaction: discord.Interaction, oldname: str, new
                                     print(f"Deleting conflicting test for {newname}/{test_mode}: id={test_id}")
                                     if USE_SUPABASE_API:
                                         await supabase_delete("tests", {"id": test_id})
+                                    elif db_pool is not None:
+                                        await db_delete_test(str(test_id))
                                     else:
                                         try:
                                             del_url = f"{WEBSITE_URL}/api/tests/{test_id}"
@@ -4256,6 +4271,80 @@ async def main():
         if http_session:
             await http_session.close()
         await close_db()
+
+
+async def db_upsert_test(username: str, mode: str, rank: str, tester_id: str, tester_name: str, ts: int) -> bool:
+    """Upsert test using direct PostgreSQL connection (fallback when Supabase unavailable)"""
+    global db_pool
+    if not db_pool:
+        return False
+    try:
+        async with db_pool.acquire() as conn:
+            query = """
+            INSERT INTO tests (username, mode, rank, "testerId", "testerName", ts)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (username, mode) DO UPDATE SET
+                rank = EXCLUDED.rank,
+                "testerId" = EXCLUDED."testerId",
+                "testerName" = EXCLUDED."testerName",
+                ts = EXCLUDED.ts
+            """
+            await conn.execute(query, username, mode, rank, tester_id, tester_name, ts)
+            return True
+    except Exception as e:
+        print(f"DB upsert error: {e}")
+        return False
+
+
+async def db_delete_test(test_id: str) -> bool:
+    """Delete test by ID using direct PostgreSQL connection"""
+    global db_pool
+    if not db_pool:
+        return False
+    try:
+        async with db_pool.acquire() as conn:
+            await conn.execute('DELETE FROM tests WHERE id = $1', int(test_id))
+            return True
+    except Exception as e:
+        print(f"DB delete error: {e}")
+        return False
+
+
+async def db_upsert_test(username: str, mode: str, rank: str, tester_id: str, tester_name: str, ts: int) -> bool:
+    """Upsert test using direct PostgreSQL connection (fallback when Supabase unavailable)"""
+    global db_pool
+    if not db_pool:
+        return False
+    try:
+        async with db_pool.acquire() as conn:
+            query = """
+            INSERT INTO tests (username, mode, rank, "testerId", "testerName", ts)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (username, mode) DO UPDATE SET
+                rank = EXCLUDED.rank,
+                "testerId" = EXCLUDED."testerId",
+                "testerName" = EXCLUDED."testerName",
+                ts = EXCLUDED.ts
+            """
+            await conn.execute(query, username, mode, rank, tester_id, tester_name, ts)
+            return True
+    except Exception as e:
+        print(f"DB upsert error: {e}")
+        return False
+
+
+async def db_delete_test(test_id: str) -> bool:
+    """Delete test by ID using direct PostgreSQL connection"""
+    global db_pool
+    if not db_pool:
+        return False
+    try:
+        async with db_pool.acquire() as conn:
+            await conn.execute('DELETE FROM tests WHERE id = $1', int(test_id))
+            return True
+    except Exception as e:
+        print(f"DB delete error: {e}")
+        return False
 
 
 if __name__ == "__main__":
