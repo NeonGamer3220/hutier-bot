@@ -292,7 +292,7 @@ MINECRAFT_API_URL = os.getenv("MINECRAFT_API_URL", "http://localhost:8080").rstr
 
 WIPE_GLOBAL_COMMANDS = os.getenv("WIPE_GLOBAL_COMMANDS", "0") == "1"
 
-COOLDOWN_SECONDS = 30 * 24 * 60 * 60
+COOLDOWN_SECONDS = 14 * 24 * 60 * 60
 DATA_FILE = "data.json"
 
 HTTP_TIMEOUT_SECONDS = 10  # hard timeout so it never "thinks forever"
@@ -311,9 +311,12 @@ TICKET_TYPES = [
     ("Axe", "axe", 1469763738889486518),
     ("Mace", "mace", 1469763612452196375),
     ("Cart", "cart", 1469763920871952435),
+    ("Creeper", "creeper", 1469764200812249180),
     ("DiaSMP", "diasmp", 1469763946968911893),
     ("OGVanilla", "ogvanilla", 1469764329460203571),
     ("ShieldlessUHC", "shieldlessuhc", 1469766017243807865),
+    ("SpearMace", "spearmace", 1469968704203788425),
+    ("SpearElytra", "spearelytra", 1469968762575912970),
 ]
 
 # Required rounds for each gamemode (FT = First to, LT = Last to)
@@ -331,8 +334,11 @@ TICKET_ROUNDS = {
     "sword": ("FT10", "FT6", None),
     "uhc": ("FT6", "FT3", None),
     "pot": ("FT10", "FT6", None),
+    "creeper": ("FT6", "FT4", "FT3"),  # FT3 if lose round
     "shieldlessuhc": ("FT6", "FT4", None),
     "axe": ("FT20", "FT10", None),
+    "spearmace": ("FT6", "FT3", None),
+    "spearelytra": ("FT6", "FT3", None),
 }
 
 
@@ -378,6 +384,8 @@ GAMEMODE_ALIASES = {
     "nethpot": "nethpot",
     "uhc": "uhc",
     "shieldlessuhc": "shieldlessuhc",
+    "spearmace": "spearmace",
+    "spearelytra": "spearelytra",
 }
 
 # Reverse mapping: bot keys (lowercase) -> proper display names
@@ -391,9 +399,12 @@ GAMEMODE_DISPLAY_NAMES = {
     "axe": "Axe",
     "mace": "Mace",
     "cart": "Cart",
+    "creeper": "Creeper",
     "diasmp": "DiaSMP",
     "ogvanilla": "OGVanilla",
     "shieldlessuhc": "ShieldlessUHC",
+    "spearmace": "SpearMace",
+    "spearelytra": "SpearElytra",
 }
 
 def normalize_gamemode(mode: str) -> str:
@@ -424,9 +435,12 @@ GAMEMODE_COLORS = {
     "smp": 0x2ecc71,       # Green
     "axe": 0x8b4513,       # Brown
     "cart": 0xf1c40f,      # Yellow
+    "creeper": 0x27ae60,   # Dark Green
     "diasmp": 0x1abc9c,    # Teal
     "ogvanilla": 0x8e44ad, # Dark Purple
     "shieldlessuhc": 0xd35400,  # Dark Orange
+    "spearmace": 0x16a085,    # Dark Teal
+    "spearelytra": 0x2980b9,   # Dark Blue
 }
 
 GAMEMODE_INDICATORS = {
@@ -439,9 +453,12 @@ GAMEMODE_INDICATORS = {
     "smp": "🟢",
     "axe": "🟤",
     "cart": "🟡",
+    "creeper": "🟢",
     "diasmp": "🔵",
     "ogvanilla": "🟣",
     "shieldlessuhc": "🟠",
+    "spearmace": "🟢",
+    "spearelytra": "🔵",
 }
 
 
@@ -1450,13 +1467,11 @@ async def api_post_test(username: str, mode: str, rank: str, tester: discord.Mem
                         print(f"PUT response: {put_resp.status} – {put_data}")
                         return {"status": put_resp.status, "data": put_data}
                 else:
-                    # No test found – will create new
                     print("No existing test, creating via POST")
     except Exception as e:
         print(f"Error checking existing test: {e}")
-        # If check fails, fall through to POST as last resort
 
-    # POST new test (no upsert flag – only if we're sure none exists)
+    # POST new test (no upsert flag)
     url = f"{WEBSITE_URL}/api/tests"
     payload = {
         "username": username,
@@ -1569,7 +1584,6 @@ class CloseTicketView(discord.ui.View):
             await interaction.response.send_message("Hiba: member not found.", ephemeral=True)
             return
 
-        # Get owner_id from channel topic (stored when ticket was created)
         topic = channel.topic or ""
         owner_id = 0
         if "owner=" in topic:
@@ -1578,7 +1592,6 @@ class CloseTicketView(discord.ui.View):
             except (ValueError, IndexError):
                 owner_id = 0
 
-        # Allow both ticket owner AND staff to close
         if member.id != owner_id and not is_staff_member(member):
             await interaction.response.send_message("Nincs jogosultságod a ticket zárásához.", ephemeral=True)
             return
@@ -1622,7 +1635,6 @@ class CloseTicketView(discord.ui.View):
             await interaction.response.send_message("Hiba: member not found.", ephemeral=True)
             return
 
-        # Only staff can give tier
         if not is_staff_member(member):
             await interaction.response.send_message("Nincs jogosultságod tier adásához.", ephemeral=True)
             return
@@ -1632,7 +1644,6 @@ class CloseTicketView(discord.ui.View):
             await interaction.response.send_message("Hiba: ez nem szövegcsatorna.", ephemeral=True)
             return
 
-        # Get owner_id and mode from channel topic
         topic = channel.topic or ""
         owner_id = 0
         mode_key = ""
@@ -1651,13 +1662,11 @@ class CloseTicketView(discord.ui.View):
             await interaction.response.send_message("Hiba: nem találom a ticket tulajdonosát.", ephemeral=True)
             return
 
-        # Get linked Minecraft name for the owner
         linked_minecraft = get_linked_minecraft_name(owner_id)
         if not linked_minecraft:
             await interaction.response.send_message("❌ A játékos nincs összekapcsolva! Nem tudom a Minecraft nevét.", ephemeral=True)
             return
 
-        # Show a select menu for tier selection (including mode)
         tier_select = TierSelectView(owner_id, linked_minecraft, mode_key, member)
         await interaction.response.send_message("Válaszd ki a játékmódot és a tier-t:", view=tier_select, ephemeral=True)
 
@@ -1861,18 +1870,11 @@ class TicketButton(discord.ui.Button):
             )
             return
 
-        # Check if player is banned from testing
-        # We need to check using the Discord username as the tierlist name
-        # The tierlist name is the Minecraft name, not Discord name
-        # We'll check both: first try Minecraft name from nickname/display name, then Discord name
-
-        # For now, check the website for ban status using the Discord name as fallback
-        # The user should ideally set their Minecraft name in their Discord nickname
+        # Check if player is banned
         player_name = member.display_name
         if member.nick:
             player_name = member.nick
 
-        # Try to get ban status from website
         if WEBSITE_URL:
             try:
                 url = f"{WEBSITE_URL}/api/tests/ban?username={player_name}"
@@ -1889,9 +1891,9 @@ class TicketButton(discord.ui.Button):
                             )
                             return
             except Exception:
-                pass  # If ban check fails, continue (fail open)
+                pass
 
-        # Rank check: only LT3+ can open tickets
+        # Rank check
         player_rank = await get_player_rank_for_mode(linked_minecraft, self.mode_key)
         if not can_open_ticket(player_rank):
             await interaction.response.send_message(
@@ -1901,6 +1903,7 @@ class TicketButton(discord.ui.Button):
             )
             return
 
+        # Cooldown check
         left = cooldown_left(member.id, self.mode_key)
         if left > 0:
             days = left // (24 * 3600)
@@ -1911,77 +1914,82 @@ class TicketButton(discord.ui.Button):
             )
             return
 
-        existing_channel_id = get_open_ticket_channel_id(member.id, self.mode_key)
-        if existing_channel_id:
-            ch = guild.get_channel(existing_channel_id)
-            if ch:
-                await interaction.response.send_message("Van már ticketed ebből a játékmódból. 🔒", ephemeral=True)
+        # Acquire lock to prevent duplicate tickets
+        lock_key = (member.id, self.mode_key)
+        if lock_key not in TICKET_CREATION_LOCKS:
+            TICKET_CREATION_LOCKS[lock_key] = asyncio.Lock()
+        async with TICKET_CREATION_LOCKS[lock_key]:
+            # Re-check for existing ticket inside lock
+            existing_channel_id = get_open_ticket_channel_id(member.id, self.mode_key)
+            if existing_channel_id:
+                ch = guild.get_channel(existing_channel_id)
+                if ch:
+                    await interaction.response.send_message("Van már ticketed ebből a játékmódból. 🔒", ephemeral=True)
+                    return
+                else:
+                    set_open_ticket_channel_id(member.id, self.mode_key, None)
+
+            category = guild.get_channel(TICKET_CATEGORY_ID) if TICKET_CATEGORY_ID else None
+            if TICKET_CATEGORY_ID and not isinstance(category, discord.CategoryChannel):
+                await interaction.response.send_message(
+                    "❌ Ticket kategória rossz / nem kategória. Állítsd be jól a TICKET_CATEGORY_ID-t.",
+                    ephemeral=True
+                )
                 return
-            else:
-                set_open_ticket_channel_id(member.id, self.mode_key, None)
 
-        category = guild.get_channel(TICKET_CATEGORY_ID) if TICKET_CATEGORY_ID else None
-        if TICKET_CATEGORY_ID and not isinstance(category, discord.CategoryChannel):
-            await interaction.response.send_message(
-                "❌ Ticket kategória rossz / nem kategória. Állítsd be jól a TICKET_CATEGORY_ID-t.",
-                ephemeral=True
+            staff_role = guild.get_role(STAFF_ROLE_ID) if STAFF_ROLE_ID else None
+
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            }
+            if staff_role:
+                overwrites[staff_role] = discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, read_message_history=True, manage_channels=True
+                )
+
+            safe_name = member.name.lower().replace(" ", "-")
+            channel_name = f"{self.mode_key}-{safe_name}"
+
+            try:
+                channel = await guild.create_text_channel(
+                    name=channel_name,
+                    category=category if isinstance(category, discord.CategoryChannel) else None,
+                    overwrites=overwrites,
+                    topic=f"NeoTiers ticket | owner={member.id} | mode={self.mode_key} | mc={linked_minecraft}",
+                    reason="NeoTiers ticket created"
+                )
+            except discord.Forbidden:
+                await interaction.response.send_message(
+                    "❌ Nincs jogom csatornát létrehozni. Add a botnak **Csatornák kezelése** jogot (és a kategórián is).",
+                    ephemeral=True
+                )
+                return
+
+            set_open_ticket_channel_id(member.id, self.mode_key, channel.id)
+
+            ping_text = ""
+
+            rounds_display = get_ticket_rounds_display(self.mode_key)
+
+            description = "Kattints egy alábbi gombra, hogy tudd tesztelni a gombon feltüntetett játékmódból."
+
+            embed = discord.Embed(
+                title="Teszt kérés",
+                description=description,
+                color=discord.Color.blurple()
             )
-            return
 
-        staff_role = guild.get_role(STAFF_ROLE_ID) if STAFF_ROLE_ID else None
+            display_mode = get_gamemode_display_name(self.mode_key)
 
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-        }
-        if staff_role:
-            overwrites[staff_role] = discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, read_message_history=True, manage_channels=True
-            )
+            embed.add_field(name="Játékmód", value=display_mode, inline=True)
+            embed.add_field(name="Minecraft név", value=f"`{linked_minecraft}`", inline=True)
 
-        safe_name = member.name.lower().replace(" ", "-")
-        channel_name = f"{self.mode_key}-{safe_name}"
+            embed.add_field(name="Körök", value=rounds_display, inline=False)
+            embed.add_field(name="Játékos", value=member.mention, inline=True)
 
-        try:
-            channel = await guild.create_text_channel(
-                name=channel_name,
-                category=category if isinstance(category, discord.CategoryChannel) else None,
-                overwrites=overwrites,
-                topic=f"NeoTiers ticket | owner={member.id} | mode={self.mode_key} | mc={linked_minecraft}",
-                reason="NeoTiers ticket created"
-            )
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                "❌ Nincs jogom csatornát létrehozni. Add a botnak **Csatornák kezelése** jogot (és a kategórián is).",
-                ephemeral=True
-            )
-            return
-
-        set_open_ticket_channel_id(member.id, self.mode_key, channel.id)
-
-        # No ping - testers are already in queue and will be notified there
-        ping_text = ""
-
-        rounds_display = get_ticket_rounds_display(self.mode_key)
-
-        description = "Kattints egy alábbi gombra, hogy tudd tesztelni a gombon feltüntetett játékmódból."
-
-        embed = discord.Embed(
-            title="Teszt kérés",
-            description=description,
-            color=discord.Color.blurple()
-        )
-
-        display_mode = get_gamemode_display_name(self.mode_key)
-
-        embed.add_field(name="Játékmód", value=display_mode, inline=True)
-        embed.add_field(name="Minecraft név", value=f"`{linked_minecraft}`", inline=True)
-
-        embed.add_field(name="Körök", value=rounds_display, inline=False)
-        embed.add_field(name="Játékos", value=member.mention, inline=True)
-
-        await channel.send(content=ping_text, embed=embed, view=CloseTicketView(owner_id=member.id, mode_key=self.mode_key))
-        await interaction.response.send_message(f"✅ Ticket létrehozva: {channel.mention}", ephemeral=True)
+            await channel.send(content=ping_text, embed=embed, view=CloseTicketView(owner_id=member.id, mode_key=self.mode_key))
+            await interaction.response.send_message(f"✅ Ticket létrehozva: {channel.mention}", ephemeral=False)
 
 
 # =========================
@@ -1998,8 +2006,11 @@ QUEUE_CHANNELS = {
     "nethpot": 1495038766769897482,
     "smp": 1495038799800176660,
     "vanilla": 1495038839591534834,
+    "creeper": 1495038857597681818,
     "cart": 1495038915453779982,
     "diasmp": 1495038938640027760,
+    "spearelytra": 1495038976988545206,
+    "spearmace": 1495038999876600008,
     "shieldlessuhc": 1495039115119296572,
     "ogvanilla": 1495039145330872341,
 }
@@ -2014,10 +2025,13 @@ QUEUE_PING_ROLES = {
     "nethpot": 1495044163194847322,
     "smp": 1495044237551472893,
     "vanilla": 1495044315272052929,
+    "creeper": 1495044383425171506,
     "cart": 1495044436403556443,
     "diasmp": 1495044514992095333,
     "shieldlessuhc": 1495044593211670711,
     "ogvanilla": 1495044664502386698,
+    "spearelytra": 1495044732680667247,
+    "spearmace": 1495044798472781944,
 }
 
 # Category where ticket channels will be created
@@ -2027,6 +2041,9 @@ TICKET_CREATE_CATEGORY_ID = 1495038336744689674
 ACTIVE_QUEUES: Dict[str, Dict[str, Any]] = {}
 QUEUE_MESSAGE_IDS: Dict[int, str] = {}
 QUEUE_PANEL_MESSAGE = None  # Tuple of (channel_id, message_id) for the queue panel message
+
+# Lock to prevent duplicate ticket creation (key: (user_id, mode_key))
+TICKET_CREATION_LOCKS: Dict[tuple, asyncio.Lock] = {}
 
 class QueuePlayer:
     """Represents a player in a queue"""
@@ -2078,7 +2095,7 @@ class QueueActionView(discord.ui.View):
             await interaction.response.send_message("Már benne vagy a queue-ban!", ephemeral=True)
             return
         if any(t.discord_id == member.id for t in queue.get("testers", [])):
-            await interaction.response.send_message("Már benne vagy a queue-ban!", ephemeral=True)
+            await interaction.response.send_message("Már benna van a queue-ban teszterként!", ephemeral=True)
             return
 
         linked_mc = get_linked_minecraft_name(member.id)
@@ -2089,7 +2106,7 @@ class QueueActionView(discord.ui.View):
             )
             return
 
-        # Check if user is a tester for THIS specific gamemode (or admin/debug) - TESTERS BYPASS ALL CHECKS
+        # Testers bypass
         if is_gamemode_tester_or_admin(member, gamemode):
             queue["testers"].append(QueuePlayer(member.id, linked_mc))
             await update_queue_message(gamemode)
@@ -2099,7 +2116,6 @@ class QueueActionView(discord.ui.View):
             )
             return
 
-        # Cooldown check: prevent users with active cooldown from joining queue
         cd_left = cooldown_left(member.id, gamemode)
         if cd_left > 0:
             days = cd_left // (24 * 60 * 60)
@@ -2111,7 +2127,6 @@ class QueueActionView(discord.ui.View):
             )
             return
 
-        # Rank check: only LT5-HT4 can join queues (regular players)
         player_rank = await get_player_rank_for_mode(linked_mc, gamemode)
         if not can_join_queue(player_rank):
             await interaction.response.send_message(
@@ -2155,7 +2170,6 @@ class QueueActionView(discord.ui.View):
                 )
                 return
 
-        # Check testers list
         for i, t in enumerate(queue.get("testers", [])):
             if t.discord_id == member.id:
                 queue["testers"].pop(i)
@@ -2181,20 +2195,46 @@ class QueueActionView(discord.ui.View):
             return
 
         queue = ACTIVE_QUEUES.get(gamemode)
-        if not queue:
-            await interaction.response.send_message("❌ A queue már lezárva.", ephemeral=True)
+        if queue:
+            # Normal case: queue exists in memory
+            if not is_staff_member(member) and queue["opened_by"] != member.id:
+                await interaction.response.send_message("❌ Csak a queue-t megnyitó tesztelő zárhatja be.", ephemeral=True)
+                return
+            view = ConfirmCloseQueueView(gamemode)
+            await interaction.response.send_message(
+                f"Biztosan be szeretnéd zárni a **{get_gamemode_display_name(gamemode)}** queue-t?",
+                view=view,
+                ephemeral=True
+            )
             return
 
-        if not is_staff_member(member) and queue["opened_by"] != member.id:
-            await interaction.response.send_message("❌ Csak a queue-t megnyitó tesztelő zárhatja be.", ephemeral=True)
-            return
-
-        view = ConfirmCloseQueueView(gamemode)
-        await interaction.response.send_message(
-            f"Biztosan be szeretnéd zárni a **{get_gamemode_display_name(gamemode)}** queue-t?",
-            view=view,
-            ephemeral=True
-        )
+        # Orphaned queue: not in memory but message may still exist
+        msg_id = None
+        for mid, gm in QUEUE_MESSAGE_IDS.items():
+            if gm == gamemode:
+                msg_id = mid
+                break
+        if msg_id:
+            channel_id = QUEUE_CHANNELS.get(gamemode)
+            if channel_id:
+                channel = bot.get_channel(channel_id)
+                if channel and isinstance(channel, discord.TextChannel):
+                    try:
+                        msg = await channel.fetch_message(msg_id)
+                        if msg.components:
+                            if not is_staff_member(member):
+                                await interaction.response.send_message("❌ Csak a queue-t megnyitó tesztelő vagy staff zárhatja be.", ephemeral=True)
+                                return
+                            view = ConfirmCloseQueueView(gamemode)
+                            await interaction.response.send_message(
+                                f"Biztosan be szeretnéd zárni a **{get_gamemode_display_name(gamemode)}** queue-t? (Queue állapot elveszett, de üzenet még nyitva)",
+                                view=view,
+                                ephemeral=True
+                            )
+                            return
+                    except Exception:
+                        pass
+        await interaction.response.send_message("❌ A queue már lezárva vagy nem elérhető.", ephemeral=True)
 
     @discord.ui.button(label="Következő játékos", style=discord.ButtonStyle.primary, custom_id="queue_next")
     async def next_player(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2264,11 +2304,6 @@ class QueueActionView(discord.ui.View):
             view = CloseTicketView(owner_id=next_player_obj.discord_id, mode_key=gamemode)
             await channel.send(embed=embed, view=view)
 
-            await interaction.response.send_message(
-                f"✅ Ticket létrehozva: {channel.mention} | Játékos: {next_player_obj.minecraft_name}",
-                ephemeral=True
-            )
-
         except Exception as e:
             await interaction.response.send_message(f"❌ Hiba a channel létrehozása során: {e}", ephemeral=True)
 
@@ -2286,24 +2321,23 @@ class ConfirmCloseQueueView(discord.ui.View):
             return
 
         queue = ACTIVE_QUEUES.get(self.gamemode)
-        if not queue:
-            await interaction.response.send_message("❌ A queue már nem létezik.", ephemeral=True)
-            return
+        queue = ACTIVE_QUEUES.get(self.gamemode)
+        if queue:
+            if queue["opened_by"] != member.id and not is_staff_member(member):
+                await interaction.response.send_message("❌ Csak a queue-t megnyitó tesztelő zárhatja be.", ephemeral=True)
+                return
 
-        if queue["opened_by"] != member.id and not is_staff_member(member):
-            await interaction.response.send_message("❌ Csak a queue-t megnyitó tesztelő zárhatja be.", ephemeral=True)
-            return
+            del ACTIVE_QUEUES[self.gamemode]
+            await interaction.response.send_message(
+                f"✅ **{get_gamemode_display_name(self.gamemode)}** queue bezárva.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.defer(ephemeral=True)
 
-        del ACTIVE_QUEUES[self.gamemode]
-        await interaction.response.send_message(
-            f"✅ **{get_gamemode_display_name(self.gamemode)}** queue bezárva.",
-            ephemeral=True
-        )
+        if interaction.guild:
+            await refresh_queue_panel(interaction.guild)
 
-        # Refresh queue panel
-        await refresh_queue_panel(interaction.guild)
-
-        # Try to update the message
         try:
             msg_id = None
             for mid, gm in list(QUEUE_MESSAGE_IDS.items()):
@@ -2314,16 +2348,23 @@ class ConfirmCloseQueueView(discord.ui.View):
                 channel_id = QUEUE_CHANNELS.get(self.gamemode)
                 if channel_id:
                     channel = bot.get_channel(channel_id)
-                    if channel:
+                    if channel and isinstance(channel, discord.TextChannel):
                         msg = await channel.fetch_message(msg_id)
-                        embed = discord.Embed(
-                            title=f"{get_gamemode_indicator(self.gamemode, False)} {get_gamemode_display_name(self.gamemode)} Queue",
-                            description="A queue zárva van.",
-                            color=get_gamemode_color(self.gamemode)
-                        )
-                        await msg.edit(embed=embed, view=None)
-                        del QUEUE_MESSAGE_IDS[msg_id]
-                        _persist_queue_message_ids()
+                        if msg.components:
+                            embed = discord.Embed(
+                                title=f"{get_gamemode_indicator(self.gamemode, False)} {get_gamemode_display_name(self.gamemode)} Queue",
+                                description="A queue zárva van.",
+                                color=get_gamemode_color(self.gamemode)
+                            )
+                            await msg.edit(embed=embed, view=None)
+                        if msg_id in QUEUE_MESSAGE_IDS:
+                            del QUEUE_MESSAGE_IDS[msg_id]
+                            _persist_queue_message_ids()
+                        if not queue:
+                            await interaction.followup.send(
+                                f"✅ **{get_gamemode_display_name(self.gamemode)}** queue bezárva (állapot visszaállítva).",
+                                ephemeral=True
+                            )
         except Exception:
             pass
 
@@ -2825,10 +2866,34 @@ async def closequeue(interaction: discord.Interaction, gamemode: app_commands.Ch
     queue = ACTIVE_QUEUES.get(mode_key)
     
     if not queue:
+        msg_id = None
+        for mid, gm in QUEUE_MESSAGE_IDS.items():
+            if gm == mode_key:
+                msg_id = mid
+                break
+        if msg_id:
+            channel_id = QUEUE_CHANNELS.get(mode_key)
+            if channel_id:
+                channel = interaction.guild.get_channel(channel_id)
+                if channel and isinstance(channel, discord.TextChannel):
+                    try:
+                        msg = await channel.fetch_message(msg_id)
+                        embed = discord.Embed(
+                            title=f"{get_gamemode_indicator(mode_key, False)} {get_gamemode_display_name(mode_key)} Queue",
+                            description="A queue zárva van.",
+                            color=get_gamemode_color(mode_key)
+                        )
+                        await msg.edit(embed=embed, view=None)
+                        del QUEUE_MESSAGE_IDS[msg_id]
+                        _persist_queue_message_ids()
+                        await interaction.followup.send(f"✅ **{gamemode.name}** queue bezárva (törölve a státuszból).", ephemeral=True)
+                        await refresh_queue_panel(interaction.guild)
+                        return
+                    except discord.NotFound:
+                        pass
         await interaction.followup.send(f"❌ A **{gamemode.name}** queue nincs nyitva.", ephemeral=True)
         return
     
-    # Check permission: staff or the person who opened it
     if queue.get("opened_by") != interaction.user.id and not is_staff_member(interaction.user):
         await interaction.followup.send("❌ Csak a queue-t megnyitó tesztelő vagy staff zárhatja be.", ephemeral=True)
         return
@@ -2838,7 +2903,6 @@ async def closequeue(interaction: discord.Interaction, gamemode: app_commands.Ch
     
     await refresh_queue_panel(interaction.guild)
     
-    # Update queue message in channel
     try:
         msg_id = None
         for mid, gm in list(QUEUE_MESSAGE_IDS.items()):
@@ -2857,8 +2921,9 @@ async def closequeue(interaction: discord.Interaction, gamemode: app_commands.Ch
                         color=get_gamemode_color(mode_key)
                     )
                     await msg.edit(embed=embed, view=None)
-                    del QUEUE_MESSAGE_IDS[msg_id]
-                    _persist_queue_message_ids()
+                    if msg_id in QUEUE_MESSAGE_IDS:
+                        del QUEUE_MESSAGE_IDS[msg_id]
+                        _persist_queue_message_ids()
     except Exception as e:
         print(f"Error updating queue message on close: {e}")
 
@@ -3083,23 +3148,18 @@ async def tierlistnamechange(interaction: discord.Interaction, oldname: str, new
                             if test_mode in old_modes:
                                 test_id = test.get("id")
                                 if test_id:
-                                print(f"Deleting conflicting test for {newname}/{test_mode}: id={test_id}")
-                                # Use best available delete method
-                                delete_success = False
-                                if db_pool is not None:
-                                    delete_success = await db_delete_test(str(test_id))
-                                elif USE_SUPABASE_API:
-                                    delete_success = await supabase_delete("tests", {"id": test_id})
-                                else:
-                                    del_url = f"{WEBSITE_URL}/api/tests/{test_id}"
-                                    try:
-                                        async with http_session.delete(del_url, headers=_auth_headers(), timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)) as d_resp:
-                                            delete_success = d_resp.status in (200, 204, 404)  # 404 = already gone
-                                            print(f"Delete conflict test status: {d_resp.status}")
-                                    except Exception as e:
-                                        print(f"Failed to delete conflicting test {test_id}: {e}")
-                                if not delete_success:
-                                    print(f"WARNING: Failed to delete conflict test {test_id}, rename may cause duplicate")
+                                    print(f"Deleting conflicting test for {newname}/{test_mode}: id={test_id}")
+                                    if USE_SUPABASE_API:
+                                        await supabase_delete("tests", {"id": test_id})
+                                    elif db_pool is not None:
+                                        await db_delete_test(str(test_id))
+                                    else:
+                                        try:
+                                            del_url = f"{WEBSITE_URL}/api/tests/{test_id}"
+                                            async with http_session.delete(del_url, headers=_auth_headers(), timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)) as d_resp:
+                                                print(f"Delete conflict test status: {d_resp.status}")
+                                        except Exception as e:
+                                            print(f"Failed to delete conflicting test {test_id}: {e}")
             except Exception as e:
                 print(f"Error checking/deleting conflicts for {newname}: {e}")
 
@@ -3992,7 +4052,7 @@ async def link(interaction: discord.Interaction, code: str = None):
                 embed = discord.Embed(
                     title="⏳ Már van egy kódod!",
                     description=f"A meglévő kódod: `{existing_code}`\n\n"
-                               f"**Minecraft szerver:** `bestpvp.hu`\n"
+                               f"**Minecraft szerver:** `45.140.164.183:25942`\n"
                                f"Ezt használd: `/link {existing_code}` a Minecraftban!\n"
                                f"Vagy várd meg amíg lejár és generálj újat.",
                     color=discord.Color.orange()
@@ -4007,7 +4067,7 @@ async def link(interaction: discord.Interaction, code: str = None):
             try:
                 await interaction.user.send(
                     f"🎮 **Összekapcsolási kód:** `{new_code}`\n\n"
-                    f"**Minecraft szerver:** `bestpvp.hu`\n"
+                    f"**Minecraft szerver:** `45.140.164.183:25942`\n"
                     f"Írd be a Minecraftban: `/link {new_code}`\n"
                     f"A kód {LINK_CODE_EXPIRY_MINUTES} percig érvényes."
                 )
@@ -4018,7 +4078,7 @@ async def link(interaction: discord.Interaction, code: str = None):
             embed = discord.Embed(
                 title="✅ Kód generálva!",
                 description=f"```\n{new_code}\n```\n"
-                           f"**Minecraft szerver:** `bestpvp.hu`\n"
+                           f"**Minecraft szerver:** `45.140.164.183:25942`\n"
                            f"Írd be a Minecraftban: `/link {new_code}`\n"
                            f"A kód **{LINK_CODE_EXPIRY_MINUTES} percig** érvényes.",
                 color=discord.Color.green()
@@ -4236,6 +4296,7 @@ async def main():
     # health server - must start AFTER http_session is ready
     asyncio.create_task(start_health_server())
 
+    # queue maintenance task
     asyncio.create_task(queue_maintenance_task())
 
     # register commands - Use guild commands only (faster sync, avoids duplicates)
