@@ -1424,7 +1424,7 @@ async def api_post_test(username: str, mode: str, rank: str, tester: discord.Mem
 
     timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)
 
-    # Check for existing test and UPDATE it directly (no delete needed)
+    # Check for existing test and try to UPDATE it via PATCH
     try:
         check_url = f"{WEBSITE_URL}/api/tests?username={username}"
         async with http_session.get(check_url, headers=_auth_headers(), timeout=timeout) as resp:
@@ -1437,8 +1437,8 @@ async def api_post_test(username: str, mode: str, rank: str, tester: discord.Mem
                     if test_mode == normalized_mode:
                         test_id = test.get("id")
                         if test_id:
-                            print(f"Found existing test for {username}/{test_mode}: id={test_id}, updating via PATCH")
-                            # Update the existing test directly via PATCH
+                            print(f"Found existing test for {username}/{test_mode}: id={test_id}, attempting PATCH update")
+                            # Try to update the existing test directly via PATCH
                             update_url = f"{WEBSITE_URL}/api/tests/{test_id}"
                             patch_payload = {
                                 "rank": rank,
@@ -1451,9 +1451,18 @@ async def api_post_test(username: str, mode: str, rank: str, tester: discord.Mem
                                     print(f"PATCH update status: {patch_resp.status}")
                                     if patch_resp.status in (200, 204):
                                         return {"status": 200, "data": {"success": True}}
-                                    # If PATCH fails, fall through to POST (which may still fail)
+                                    # PATCH failed (maybe not supported) - try DELETE then POST
+                                    print("PATCH not supported or failed, trying DELETE then POST")
                             except Exception as e:
-                                print(f"PATCH update failed: {e}")
+                                print(f"PATCH update exception: {e}, will try DELETE then POST")
+                            
+                            # Attempt DELETE of the duplicate
+                            del_url = f"{WEBSITE_URL}/api/tests/{test_id}"
+                            try:
+                                async with http_session.delete(del_url, headers=_auth_headers(), timeout=timeout) as d_resp:
+                                    print(f"DELETE duplicate status: {d_resp.status}")
+                            except Exception as e:
+                                print(f"DELETE failed: {e}")
     except Exception as e:
         print(f"Error checking/updating duplicate: {e}")
 
