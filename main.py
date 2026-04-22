@@ -4238,7 +4238,6 @@ async def main():
     # health server - must start AFTER http_session is ready
     asyncio.create_task(start_health_server())
 
-    # queue maintenance task
     asyncio.create_task(queue_maintenance_task())
 
     # register commands - Use guild commands only (faster sync, avoids duplicates)
@@ -4289,43 +4288,6 @@ async def main():
         if http_session:
             await http_session.close()
         await close_db()
-
-
-async def db_upsert_test(username: str, mode: str, rank: str, tester_id: str, tester_name: str, ts: int) -> bool:
-    """Upsert test using direct PostgreSQL connection (fallback when Supabase unavailable)"""
-    global db_pool
-    if not db_pool:
-        return False
-    try:
-        async with db_pool.acquire() as conn:
-            query = """
-            INSERT INTO tests (username, mode, rank, "testerId", "testerName", ts)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (username, mode) DO UPDATE SET
-                rank = EXCLUDED.rank,
-                "testerId" = EXCLUDED."testerId",
-                "testerName" = EXCLUDED."testerName",
-                ts = EXCLUDED.ts
-            """
-            await conn.execute(query, username, mode, rank, tester_id, tester_name, ts)
-            return True
-    except Exception as e:
-        print(f"DB upsert error: {e}")
-        return False
-
-
-async def db_delete_test(test_id: str) -> bool:
-    """Delete test by ID using direct PostgreSQL connection"""
-    global db_pool
-    if not db_pool:
-        return False
-    try:
-        async with db_pool.acquire() as conn:
-            await conn.execute('DELETE FROM tests WHERE id = $1', int(test_id))
-            return True
-    except Exception as e:
-        print(f"DB delete error: {e}")
-        return False
 
 
 async def db_upsert_test(username: str, mode: str, rank: str, tester_id: str, tester_name: str, ts: int) -> bool:
