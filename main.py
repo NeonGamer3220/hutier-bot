@@ -1424,7 +1424,7 @@ async def api_post_test(username: str, mode: str, rank: str, tester: discord.Mem
 
     timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)
 
-    # Check for existing test and delete it before inserting
+    # Check for existing test and UPDATE it directly (no delete needed)
     try:
         check_url = f"{WEBSITE_URL}/api/tests?username={username}"
         async with http_session.get(check_url, headers=_auth_headers(), timeout=timeout) as resp:
@@ -1437,21 +1437,25 @@ async def api_post_test(username: str, mode: str, rank: str, tester: discord.Mem
                     if test_mode == normalized_mode:
                         test_id = test.get("id")
                         if test_id:
-                            print(f"Found duplicate test for {username}/{test_mode}: id={test_id}, deleting...")
-                            # Prefer DB delete, then Supabase, then website API
-                            if db_pool is not None:
-                                await db_delete_test(str(test_id))
-                            elif USE_SUPABASE_API:
-                                await supabase_delete("tests", {"id": test_id})
-                            else:
-                                del_url = f"{WEBSITE_URL}/api/tests/{test_id}"
-                                try:
-                                    async with http_session.delete(del_url, headers=_auth_headers(), timeout=timeout) as d_resp:
-                                        print(f"Delete API status: {d_resp.status}")
-                                except Exception as e:
-                                    print(f"Delete failed: {e}")
+                            print(f"Found existing test for {username}/{test_mode}: id={test_id}, updating via PATCH")
+                            # Update the existing test directly via PATCH
+                            update_url = f"{WEBSITE_URL}/api/tests/{test_id}"
+                            patch_payload = {
+                                "rank": rank,
+                                "testerId": str(tester.id),
+                                "testerName": tester.display_name,
+                                "ts": int(time.time()),
+                            }
+                            try:
+                                async with http_session.patch(update_url, json=patch_payload, headers=_auth_headers(), timeout=timeout) as patch_resp:
+                                    print(f"PATCH update status: {patch_resp.status}")
+                                    if patch_resp.status in (200, 204):
+                                        return {"status": 200, "data": {"success": True}}
+                                    # If PATCH fails, fall through to POST (which may still fail)
+                            except Exception as e:
+                                print(f"PATCH update failed: {e}")
     except Exception as e:
-        print(f"Error checking/deleting duplicate: {e}")
+        print(f"Error checking/updating duplicate: {e}")
 
     # Insert new test via website API with upsert flag
     url = f"{WEBSITE_URL}/api/tests"
@@ -3072,18 +3076,23 @@ async def tierlistnamechange(interaction: discord.Interaction, oldname: str, new
                             if test_mode in old_modes:
                                 test_id = test.get("id")
                                 if test_id:
-                                    print(f"Deleting conflicting test for {newname}/{test_mode}: id={test_id}")
-                                    if USE_SUPABASE_API:
-                                        await supabase_delete("tests", {"id": test_id})
-                                    elif db_pool is not None:
-                                        await db_delete_test(str(test_id))
-                                    else:
-                                        try:
-                                            del_url = f"{WEBSITE_URL}/api/tests/{test_id}"
-                                            async with http_session.delete(del_url, headers=_auth_headers(), timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)) as d_resp:
-                                                print(f"Delete conflict test status: {d_resp.status}")
-                                        except Exception as e:
-                                            print(f"Failed to delete conflicting test {test_id}: {e}")
+                                print(f"Deleting conflicting test for {newname}/{test_mode}: id={test_id}")
+                                # Use best available delete method
+                                delete_success = False
+                                if db_pool is not None:
+                                    delete_success = await db_delete_test(str(test_id))
+                                elif USE_SUPABASE_API:
+                                    delete_success = await supabase_delete("tests", {"id": test_id})
+                                else:
+                                    del_url = f"{WEBSITE_URL}/api/tests/{test_id}"
+                                    try:
+                                        async with http_session.delete(del_url, headers=_auth_headers(), timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)) as d_resp:
+                                            delete_success = d_resp.status in (200, 204, 404)  # 404 = already gone
+                                            print(f"Delete conflict test status: {d_resp.status}")
+                                    except Exception as e:
+                                        print(f"Failed to delete conflicting test {test_id}: {e}")
+                                if not delete_success:
+                                    print(f"WARNING: Failed to delete conflict test {test_id}, rename may cause duplicate")
             except Exception as e:
                 print(f"Error checking/deleting conflicts for {newname}: {e}")
 
