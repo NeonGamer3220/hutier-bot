@@ -292,7 +292,7 @@ MINECRAFT_API_URL = os.getenv("MINECRAFT_API_URL", "http://localhost:8080").rstr
 
 WIPE_GLOBAL_COMMANDS = os.getenv("WIPE_GLOBAL_COMMANDS", "0") == "1"
 
-COOLDOWN_SECONDS = 14 * 24 * 60 * 60
+COOLDOWN_SECONDS = 30 * 24 * 60 * 60
 DATA_FILE = "data.json"
 
 HTTP_TIMEOUT_SECONDS = 10  # hard timeout so it never "thinks forever"
@@ -2321,7 +2321,6 @@ class ConfirmCloseQueueView(discord.ui.View):
             return
 
         queue = ACTIVE_QUEUES.get(self.gamemode)
-        queue = ACTIVE_QUEUES.get(self.gamemode)
         if queue:
             if queue["opened_by"] != member.id and not is_staff_member(member):
                 await interaction.response.send_message("❌ Csak a queue-t megnyitó tesztelő zárhatja be.", ephemeral=True)
@@ -4011,7 +4010,7 @@ async def cooldown(interaction: discord.Interaction, user: discord.User = None):
                 mode_cooldowns.append(f"\n🌐 **Globális cooldown**: {days} nap {hours} óra")
 
         embed.description = "\n".join(mode_cooldowns)
-        embed.set_footer(text=f"Cooldown időtartam: 14 nap")
+        embed.set_footer(text=f"Cooldown időtartam: 30 nap")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
